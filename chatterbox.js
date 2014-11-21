@@ -53,7 +53,19 @@ $(function () {
       switch (contents.type) {
         case 'offer':
           window.console.log('offer received.');
+          if (!isInitiator) {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(contents));
+          }
           break;
+        case 'answer':
+          window.console.log('answer received.');
+          if (isInitiator) {
+            peerConnection.setRemoteDescription(new RTCSessionDescription(contents));
+          }
+          break;
+        case 'candidate':
+          var candidate = new RTCIceCandidate({sdpMLineIndex:contents.label, candidate:contents.candidate});
+          pc.addIceCandidate(candidate);
         case 'initiator':
           isInitiator = contents.value;
           window.console.log('intiator: ' + isInitiator);
@@ -65,7 +77,7 @@ $(function () {
 
   var createWebSocket = function() {
     websocketOpen = false;
-    ws = new WebSocket("ws://localhost:8080/socket");
+    ws = new WebSocket("ws://baracus.kir.corp.google.com:8080/socket");
     websocketCreateTime = Date.now();
     ws.onmessage = websocketRecv;
     ws.onclose = createWebSocket;
@@ -79,6 +91,10 @@ $(function () {
         window.console.log('sending queued message');
       }
       msgQueue = [];
+    };
+    ws.onerror = function(evt) {
+      window.console.log("Websocket error.");
+      window.console.log(evt);
     };
   };
   createWebSocket();
@@ -96,21 +112,24 @@ $(function () {
 
   var streamAvailable = function(stream) {
     window.console.log('stream available');
-    var element = document.querySelector("#remote");
+    var element = document.querySelector("#local");
     window.console.log(element);
-    window.console.log(URL.createObjectURL(stream));
     element.src = URL.createObjectURL(stream);
     peerConnection.addStream(stream);
     peerConnection.createOffer(function(offer) {
-      window.console.log('creating offer');
+      window.console.log('sending offer');
       var offerJson = $.toJSON(offer);
       peerConnection.setLocalDescription(offer);
       sendMsg(offerJson);
     });
     peerConnection.onicecandidate = function(candidate) {
-      var candidateJson = $.toJSON(candidate);
       window.console.log('new ice candidate');
+      var candidateJson = $.toJSON(candidate);
       sendMsg(candidateJson);
+    };
+    peerConnection.onaddstream = function(evt) {
+      var element = document.querySelector("#remote");
+      element.src = URL.createObjectURL(evt.stream);
     };
   };
 

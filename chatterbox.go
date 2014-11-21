@@ -288,7 +288,6 @@ func (s *Server) HandleConnection(ws *websocket.Conn) {
 func main() {
 	wd, _ := os.Getwd()
 	s := NewServer()
-	// go s.Listen()
 	fmt.Println("Starting server on port 8080...")
 	fmt.Println(wd)
 	http.Handle("/socket", websocket.Handler(s.HandleConnection))
