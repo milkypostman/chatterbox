@@ -1,148 +1,152 @@
-var MINI = require('minified');
-var _=MINI._, $=MINI.$, $$=MINI.$$, EE=MINI.EE, HTML=MINI.HTML;
-
-$(function () {
-  navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
-
-  var $ul = $('#messages');
-  var ws;
-  var peerConnection = new webkitRTCPeerConnection(null);
-  var stream;
-  var msgQueue = [];
-
-  var isInitiator = false;
-  var websocketOpen = false;
-  var websocketCreateTime;
-  var websocketOpenTime;
-  var room = 'abcdef';
+var Chatterbox = function() {
+  this.isInitiator_ = false;
+  this.streamInitialized_ = false;
+  this.haveOffer_ = false;
 
 
-  var id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    var r = Math.random()*16|0, v = c == 'x' ? r : (r&0x3|0x8);
-    return v.toString(16);
-  });
+  this.pc_ = new RTCPeerConnection(null);
+  this.pc_.onsignalingstatechange = this.onSignalingStateChange_.bind(this);
+  this.pc_.oniceconnectionstatechange = this.onIceConnectionStateChange_.bind(this);
+  this.pc_.onicecandidate = this.onIceCandidate_.bind(this);
+  this.pc_.onaddstream = this.onAddStream_.bind(this);
+  this.onIceConnectionStateChange_();
+  this.onSignalingStateChange_();
 
-  var client = {
-      id: id
+  this.socket_ = new CSocket('ws://localhost:8080/socket');
+  this.socket_.onRtcMessage = this.onRtcMessage_.bind(this);
+  this.socket_.onRtcError = this.onRtcError_.bind(this);
+
+  getUserMedia({ "audio": true, "video": true },
+      this.onStreamAvailable_.bind(this),
+      this.onStreamError_.bind(this));
+};
+
+
+Chatterbox.prototype.maybeCreateAnswer_ = function() {
+  trace('Maybe create answer?');
+  if(!this.isInitiator_ && this.streamInitialized_ && this.haveOffer_) {
+    this.pc_.createAnswer(this.onAnswerCreated_.bind(this));
   };
+};
 
-  var getUrlParameter = function(sParam) {
-    var sPageURL = window.location.search.substring(1);
-    var sURLVariables = sPageURL.split('&');
-    for (var i = 0; i < sURLVariables.length; i++)
-    {
-      var sParameterName = sURLVariables[i].split('=');
-      if (sParameterName[0] == sParam)
-      {
-        return sParameterName[1];
-      }
-    }
-    return undefined;
-  };
+Chatterbox.prototype.onAnswerCreated_ = function(answer) {
+  this.pc_.setLocalDescription(answer);
+  this.socket_.send(JSON.stringify(answer));
+};
 
-  var websocketRecv = function(event) {
-    window.console.log('websocket event');
-    msg = $.parseJSON(event.data);
-    if (msg['type'] == 'error') {
-      $ul.add(EE('li', "Error:  " + msg['msg']));
-      return;
-    }
-    if (msg['type'] == 'msg') {
-      $ul.add(EE('li', "Msg:  " + msg['msg']));
-      var contents = $.parseJSON(msg['msg']);
-      switch (contents.type) {
-        case 'offer':
-          window.console.log('offer received.');
-          if (!isInitiator) {
-            peerConnection.setRemoteDescription(new RTCSessionDescription(contents));
-          }
-          break;
-        case 'answer':
-          window.console.log('answer received.');
-          if (isInitiator) {
-            peerConnection.setRemoteDescription(new RTCSessionDescription(contents));
-          }
-          break;
-        case 'candidate':
-          var candidate = new RTCIceCandidate({sdpMLineIndex:contents.label, candidate:contents.candidate});
-          pc.addIceCandidate(candidate);
-        case 'initiator':
-          isInitiator = contents.value;
-          window.console.log('intiator: ' + isInitiator);
-          break;
-      }
-      return;
-    }
-  };
+Chatterbox.prototype.onOfferCreated_ = function(offer) {
+  this.pc_.setLocalDescription(offer);
+  this.socket_.send(JSON.stringify(offer));
+};
 
-  var createWebSocket = function() {
-    websocketOpen = false;
-    ws = new WebSocket("ws://baracus.kir.corp.google.com:8080/socket");
-    websocketCreateTime = Date.now();
-    ws.onmessage = websocketRecv;
-    ws.onclose = createWebSocket;
-    ws.onopen = function() {
-      websocketOpen = true;
-      websocketOpenTime = Date.now();
-      window.console.log("Time to open websocket: " + (websocketOpenTime - websocketCreateTime));
-      ws.send($.toJSON({'type': 'join', 'src': client.id, 'room': room}));
-      for (var i in msgQueue) {
-        ws.send(msgQueue[i]);
-        window.console.log('sending queued message');
-      }
-      msgQueue = [];
-    };
-    ws.onerror = function(evt) {
-      window.console.log("Websocket error.");
-      window.console.log(evt);
-    };
-  };
-  createWebSocket();
+Chatterbox.prototype.onRtcError_ = function(err) {
+};
 
-  var sendMsg = function(msg) {
-    var jsonMsg = $.toJSON({'type': 'msg', 'room': room, 'src': client.id, 'msg': msg});
-    if (websocketOpen) {
-      ws.send(jsonMsg);
-      window.console.log('sending message');
-    } else {
-      msgQueue.push(jsonMsg);
-    }
-  };
+Chatterbox.prototype.handleOffer_ = function(data) {
+  if (!this.isInitiator_) {
+    this.pc_.setRemoteDescription(new RTCSessionDescription(data),
+        function() { trace('Success adding remote by offer'); },
+        function() { trace('Error adding remote by offer'); }
+        );
+    this.haveOffer_ = true;
+    this.maybeCreateAnswer_();
+  }
+};
 
+Chatterbox.prototype.handleAnswer_ = function(data) {
+  if (this.isInitiator_) {
+    this.pc_.setRemoteDescription(new RTCSessionDescription(data),
+        function() { trace('Success adding remote by answer.'); },
+        function() { trace('Error adding remote by answer.'); }
+        );
+  }
+};
 
-  var streamAvailable = function(stream) {
-    window.console.log('stream available');
-    var element = document.querySelector("#local");
-    window.console.log(element);
-    element.src = URL.createObjectURL(stream);
-    peerConnection.addStream(stream);
-    peerConnection.createOffer(function(offer) {
-      window.console.log('sending offer');
-      var offerJson = $.toJSON(offer);
-      peerConnection.setLocalDescription(offer);
-      sendMsg(offerJson);
+Chatterbox.prototype.handleIceCandidate_ = function(data) {
+  var candidate = data.candidate;
+  if (isDefAndNotNull(candidate)) {
+    var iceCandidate = new RTCIceCandidate({
+        sdpMLineIndex: candidate.sdpMLineIndex,
+        candidate: candidate.candidate
     });
-    peerConnection.onicecandidate = function(candidate) {
-      window.console.log('new ice candidate');
-      var candidateJson = $.toJSON(candidate);
-      sendMsg(candidateJson);
-    };
-    peerConnection.onaddstream = function(evt) {
-      var element = document.querySelector("#remote");
-      element.src = URL.createObjectURL(evt.stream);
-    };
+    this.pc_.addIceCandidate(iceCandidate,
+        function() {trace('Add ice candidate success.');},
+        function() {trace('Add ice candidate failure.');}
+        );
+  } else {
+    trace('No more ice candidates.');
+  }
+};
+
+Chatterbox.prototype.handleInitiator_ = function(data) {
+  if (isDefAndNotNull(data.value)) {
+    this.isInitiator_ = !!data.value;
+    trace('Intiator status: ' + this.isInitiator_);
+  }
+};
+
+Chatterbox.prototype.onRtcMessage_ = function(msg) {
+  var data = JSON.parse(msg);
+  switch (data.type) {
+    case 'offer':
+      this.handleOffer_(data);
+      break;
+    case 'answer':
+      this.handleAnswer_(data);
+      break;
+    case 'icecandidate':
+      this.handleIceCandidate_(data);
+      break;
+    case 'initiator':
+      this.handleInitiator_(data);
+      break;
+    default:
+      trace('Unknown RTC message: ' + data);
+      break;
   };
+};
 
-  var streamError = function(error) {
-    window.console.log("Errors happen: " + error);
-  };
+Chatterbox.prototype.onStreamAvailable_ = function(stream) {
+  trace('Local video stream available.');
+  this.pc_.addStream(stream);
+  this.streamInitialized_ = true;
+  if (this.isInitiator_) {
+    this.pc_.createOffer(this.onOfferCreated_.bind(this));
+  } else {
+    this.maybeCreateAnswer_();
+  }
 
-  navigator.getUserMedia({ "audio": true, "video": true }, streamAvailable, streamError);
+  if (isDefAndNotNull(this.onStreamAvailable)) {
+    this.onStreamAvailable(stream);
+  }
+};
 
-  $('#sendButton').on('click', function(){
-    var data = _.trim($('#data').get('value'));
-    if (data != '') {
-      sendMsg(data);
-    }
-  });
-});
+Chatterbox.prototype.onAddStream_ = function(evt) {
+  if (isDefAndNotNull(this.onAddStream)) {
+    this.onAddStream(evt.stream);
+  }
+};
+
+Chatterbox.prototype.onIceCandidate_ = function(candidate) {
+  var candidateJson = JSON.stringify({type: candidate.type, candidate: candidate.candidate});
+  this.socket_.send(candidateJson);
+};
+
+Chatterbox.prototype.onSignalingStateChange_ = function () {
+  trace('Signaling state changed: ' + this.pc_.signalingState);
+};
+
+Chatterbox.prototype.onIceConnectionStateChange_ = function () {
+  trace('ICE Connection state: ' + this.pc_.iceConnectionState);
+  // if (this.pc_.iceConnectionState == 'connected') {
+  //   trace('join time: ' + (Date.now() - joinTime));
+  // };
+};
+
+Chatterbox.prototype.onStreamError_ = function(error) {
+  trace("Errors happen: " + error);
+};
+
+Chatterbox.prototype.onSignalingStateChange_ = function() {
+  trace('Signaling state changed: ' + this.pc_.signalingState);
+};
